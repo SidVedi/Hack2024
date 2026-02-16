@@ -1,0 +1,25 @@
+flowchart TD
+    A["🌐 GET /trainer/generate-next-hand"] --> B["generate_generic_action_combinations()"]
+    B --> B1["StrategyRequestProcessor\n(parse request params)"]
+    B1 --> B2["get_matching_strategy()\n→ StrategyObject"]
+    B2 --> B3["Try random action combos\nuntil tree node found"]
+    B3 --> B4["StrategyRepository\n.get_tree_node_by_combo()\n→ raw MongoDB dict"]
+    
+    B4 --> C["tree_node = raw dict\ndata = processor data\nactionList = combo chars"]
+
+    C --> D["decode_range(tree_node['range'])"]
+    
+    D --> D1["brotli.decompress(bytes)"]
+    D1 --> D2["np.frombuffer(dtype=float16)\n→ cast to float64"]
+    D2 --> D3["Clamp values < threshold → 0"]
+    D3 --> E["range_array\n⚠️ May be SHORT\ne.g. 800 values"]
+
+    E --> F["_generate_hand_response()"]
+    F --> F1["decode_strategy_ev()\n→ strategy + EV arrays"]
+    F1 --> F2["Pick hole card from\nrange_array by difficulty"]
+    F2 --> F3["Build handActions\nwith EV, evDiff, regretPercent"]
+    F3 --> G["✅ JSON Response"]
+
+    style D fill:#ff6b6b,color:#fff
+    style E fill:#ff6b6b,color:#fff
+    style D3 fill:#ff6b6b,color:#fff
