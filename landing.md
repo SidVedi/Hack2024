@@ -1,6 +1,5 @@
-# Trainer V3 Landing Revamp Plan (Phase 1)
+# Trainer V3 Landing Page Revamp Plan
 
-**Target Date:** Wednesday, Feb 26, 2026  
 **Prepared by:** Engineering Team  
 **Branch:** `feature/gl-proto`
 
@@ -8,144 +7,129 @@
 
 ## Executive Summary
 
-This plan focuses on revamping the Trainer V3 Landing experience for Phase 1 by constraining the experience to **Preflop + Custom**, hardening landing configuration behavior, and making Custom flow reuse Strategy-page interaction patterns where logical.
+This plan revamps the **Trainer V3 Landing page ** by narrowing the landing experience to **Preflop + Custom**, improving Custom flow through logical Strategy-page reuse, and hardening landing-state reliability so users can consistently configure and start training without crashes or mismatched payloads.
 
 ### Scope Summary
 
-| In Scope | Out of Scope (Deferred) |
+| In Scope (Landing Only) | Out of Scope |
 |----------|--------------------------|
-| Restrict Landing street/mode to Preflop + Custom | Standard postflop mode exposure on landing (Flop/Turn/River) |
-| Custom mode UI/UX aligned with Strategy-page interaction flow | Villain range/matrix work (Phase 2 track) |
-| Custom sequence builder stability (reset/progression/empty states) | Training view simplification outside landing scope |
-| Spot Discovery empty-state crash hardening on landing | Stats/history deep enhancements |
-| Session payload reliability for custom sequences (`customConfig`) | Adaptive difficulty tuning |
-| Focused unit test coverage for landing/custom mapping changes | Broad repo-wide refactors |
+| Restrict landing street/mode selector to Preflop + Custom | Training View feature changes |
+| Strategy-style UX reuse for Custom builder interactions | Villain range/matrix visibility work |
+| Spot Discovery empty-state safety on landing | Postflop mode rollout beyond landing |
+| Reliable custom sequence → session payload mapping from landing | Stats/history enhancements |
+| Focused unit tests for landing/custom config behavior | Non-landing refactors |
 
 ### Custom Reuse Strategy Description
 
-The **Custom** experience should reuse Strategy-page logic and interaction conventions where possible (without breaking UnifiedTrainer contracts):
+The **Custom** section on landing should logically reuse Strategy-page interaction patterns while preserving UnifiedTrainer contracts:
 
-1. **Sequence-first interaction model** — Position-by-position action flow that mirrors Strategy-page expectations
-2. **Consistent action progression** — Active player and step progression follows familiar Strategy behavior
-3. **Reset and recovery parity** — Reset behavior, loading states, and retry messaging align with Strategy interaction standards
-4. **Data contract preservation** — Continue using existing Trainer V3 landing/session flow and `get-player-next-actions` pipeline
+1. **Sequence-first UI** — Keep position-by-position action building flow familiar to Strategy users
+2. **Progressive action updates** — Continue using real next-action API results for each decision point
+3. **Consistent reset/recovery behavior** — Align reset/loading/retry states with Strategy conventions
+4. **Safe handoff to trainer session** — Ensure selected action sequence maps correctly into `customConfig`
 
 ---
 
 ## Technical Approach
 
-### Approach A: Mode-Constrained Landing + Strategy-Style Custom Builder (Selected)
+### Landing-Only Revamp Approach (Selected)
 
 **Effort:** 8-14 hours
 
-This approach keeps existing Trainer V3 architecture intact while tightening the landing scope and improving Custom UX by reusing Strategy interaction patterns.
+This approach keeps existing architecture and updates only landing-owned surfaces and landing-to-session mapping.
 
 **Core changes:**
-- Restrict mode selector and state normalization to `preflop` + `custom`
-- Refactor CustomSpotBuilder interaction/presentation toward Strategy-style sequence UX
-- Harden Spot Discovery empty-state behavior and CTA gating
-- Validate and enforce robust `customConfig` generation in session builder
-- Add targeted tests for behavior and mapping
-
-### Alternative Considered (Not Selected for this phase)
-
-**Approach B: Full UI component extraction from Strategy page**
-
-This was not selected for Phase 1 to avoid high-risk cross-feature coupling and excessive refactor scope.
+- Restrict mode selector and persisted-mode normalization to `preflop` + `custom`
+- Refactor `CustomSpotBuilder` interaction/presentation with logical Strategy-style reuse
+- Harden Spot Discovery empty-state behavior and Start CTA gating
+- Validate and enforce robust `customConfig` generation from landing state
+- Add targeted tests for landing and custom mapping logic
 
 ---
 
 ## Task Breakdown
 
-### Phase 1-A: Landing Mode Constraints
+### Track A: Landing Mode Constraints
 
 | Task | File(s) | Effort | Priority |
 |------|---------|--------|----------|
 | A.1 Restrict visible mode options to Preflop + Custom | `components/UnifiedTrainer/Configuration/StreetSelector.tsx` | 1-2h | P0 |
 | A.2 Normalize persisted/URL postflop mode values to Preflop | `components/UnifiedTrainer/hooks/useTrainerLandingConfig.ts` | 1h | P0 |
-| A.3 Verify Start CTA logic remains consistent after mode narrowing | `components/UnifiedTrainer/TrainerLanding.tsx` | 0.5h | P1 |
+| A.3 Verify Start CTA behavior after mode narrowing | `components/UnifiedTrainer/TrainerLanding.tsx` | 0.5h | P1 |
 
-**Estimated:** 2.5-3.5 hours
-
-### Phase 1-B: Custom Builder Reuse and UX Alignment
+### Track B: Custom Builder Strategy Reuse
 
 | Task | File(s) | Effort | Priority |
 |------|---------|--------|----------|
-| B.1 Align CustomSpotBuilder progression flow with Strategy sequence conventions | `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 2-4h | P0 |
-| B.2 Reuse existing Strategy interaction patterns/components logically (without breaking contracts) | `components/ActionSequence/PlayerSequence.tsx`, `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 2-3h | P0 |
-| B.3 Align reset/loading/retry behavior to Strategy-like UX | `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 1-2h | P1 |
+| B.1 Align Custom builder progression with Strategy interaction conventions | `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 2-4h | P0 |
+| B.2 Reuse Strategy sequence/action patterns logically without cross-feature coupling | `components/ActionSequence/PlayerSequence.tsx`, `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 2-3h | P0 |
+| B.3 Align reset/loading/retry behavior to Strategy-style UX | `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` | 1-2h | P1 |
 
-**Estimated:** 5-9 hours
-
-### Phase 1-C: Robustness + Mapping Reliability
+### Track C: Landing Robustness + Payload Reliability
 
 | Task | File(s) | Effort | Priority |
 |------|---------|--------|----------|
 | C.1 Prevent landing crash when Spot Discovery returns empty | `components/UnifiedTrainer/TrainerLanding.tsx` | 1h | P0 |
-| C.2 Improve explicit fallback messaging and guidance for sparse/no strategy states | `components/UnifiedTrainer/Configuration/SpotSelector.tsx`, `components/UnifiedTrainer/TrainerLanding.tsx` | 1h | P1 |
-| C.3 Verify and harden custom action sequence -> session payload mapping | `components/UnifiedTrainer/utils/sessionConfigBuilder.ts` | 1-2h | P0 |
+| C.2 Improve fallback messaging when configuration has no available strategies | `components/UnifiedTrainer/Configuration/SpotSelector.tsx`, `components/UnifiedTrainer/TrainerLanding.tsx` | 1h | P1 |
+| C.3 Harden custom sequence → `customConfig` mapping | `components/UnifiedTrainer/utils/sessionConfigBuilder.ts` | 1-2h | P0 |
 
-**Estimated:** 3-4 hours
-
-### Phase 1-D: Testing and Verification
+### Track D: Tests and Verification
 
 | Task | File(s) | Effort | Priority |
 |------|---------|--------|----------|
-| D.1 Add/update tests for mode restriction and normalization | `__tests__/hooks/useTrainerLandingConfig.test.ts`, `components/UnifiedTrainer/__tests__/TrainerLanding.configValidation.test.ts` | 1-2h | P0 |
-| D.2 Add/update tests for custom payload mapping and reset/progression logic | `components/UnifiedTrainer/utils/__tests__/sessionConfigBuilder.test.ts`, targeted CustomSpotBuilder tests | 1-2h | P0 |
+| D.1 Add/update tests for mode restriction + normalization | `__tests__/hooks/useTrainerLandingConfig.test.ts`, `components/UnifiedTrainer/__tests__/TrainerLanding.configValidation.test.ts` | 1-2h | P0 |
+| D.2 Add/update tests for custom payload mapping and reset/progression behavior | `components/UnifiedTrainer/utils/__tests__/sessionConfigBuilder.test.ts`, targeted CustomSpotBuilder tests | 1-2h | P0 |
 | D.3 Run targeted lint/tests for changed files | Frontend test/lint commands | 0.5-1h | P0 |
-
-**Estimated:** 2.5-5 hours
 
 ---
 
 ## Detailed Implementation Notes
 
-### 1) Restrict Landing Modes
+### 1. Restrict Landing Modes
 
 Landing should only expose:
 
 ```typescript
-const TRAINING_MODES_PHASE1 = ['preflop', 'custom'];
+const TRAINING_MODES = ['preflop', 'custom'];
 ```
 
-Any persisted or URL-initialized `flop/turn/river` mode should normalize back to `preflop` for Phase 1.
+Persisted or URL-initialized `flop/turn/river` values should be normalized to `preflop` on landing state init.
 
-### 2) Strategy-Style Custom Reuse
+### 2. Custom Mode Reuse Flow
 
-Custom builder keeps current API flow but follows Strategy interaction conventions:
+Custom builder keeps current API flow and aligns interaction patterns:
 
 ```
 User selects Custom mode
   → Fetch initial next-actions from strategy tree API
-  → Render sequence cards/chips with Strategy-style progression semantics
+  → Render sequence UI with Strategy-style progression semantics
 
 User clicks actions position-by-position
   → Update selectedActions in Redux
   → Fetch next available actions
-  → Advance active position/street with consistent reset/retry behavior
+  → Maintain consistent active position and recovery states
 
 User starts training
   → sessionConfigBuilder reads selectedActions + cardSelection
-  → Builds customConfig safely (preflop required; optional postflop/board)
+  → Builds safe customConfig (required preflop, optional postflop/board)
   → Session starts at the selected decision point
 ```
 
-### 3) Empty Discovery Safety
+### 3. Empty Discovery Safety
 
 If Spot Discovery returns zero scenarios:
-- No crash on landing
-- Start button disabled when configuration is not trainable
-- Clear guidance to modify database/site/stack inputs
+- Landing does not crash
+- Start CTA is deterministically gated
+- Clear guidance prompts user to adjust configuration
 - Custom mode remains available with transparent state messaging
 
-### 4) Custom Payload Reliability
+### 4. Custom Payload Reliability
 
-`sessionConfigBuilder` must produce a safe `customConfig`:
-- Include `preflopActions` only when valid data exists
-- Include optional `flopActions/turnActions/riverActions` when present
+`sessionConfigBuilder` must produce safe `customConfig`:
+- Include `preflopActions` only when valid
+- Include `flopActions/turnActions/riverActions` only when present
 - Include `boardCards` only when format and uniqueness checks pass
-- Fail safe on partial/invalid selections (no malformed payloads)
+- Fail safe for partial/invalid states (no malformed payload)
 
 ---
 
@@ -153,80 +137,49 @@ If Spot Discovery returns zero scenarios:
 
 | Risk | Mitigation |
 |------|------------|
-| Reuse effort introduces coupling to Strategy-specific assumptions | Reuse interaction patterns selectively; keep UnifiedTrainer contracts primary |
-| Narrowing modes causes persistence edge cases from old saved configs | Add mode normalization in hook-level state initialization |
-| Empty discovery handling regresses CTA behavior | Add deterministic gating tests around unavailable strategies |
-| Custom payload drift between UI state and backend expectation | Add explicit mapping tests for preflop-only, partial postflop, and board-card cases |
+| Strategy-style reuse introduces hidden coupling | Reuse interaction patterns selectively; keep UnifiedTrainer boundaries intact |
+| Mode restriction causes persisted-state edge cases | Add explicit normalization in landing config hook |
+| Empty discovery handling regresses CTA behavior | Add deterministic gating tests for unavailable scenarios |
+| Custom payload mismatch between UI and session start | Add focused mapping tests for preflop-only, partial postflop, and board-card cases |
 
 ---
 
 ## Definition of Done
 
-### Landing
+### Landing Page
 - [ ] Mode selector shows only Preflop and Custom
-- [ ] Persisted/URL postflop modes normalize to Preflop safely
-- [ ] No crashes when Spot Discovery is empty
-- [ ] CTA and guidance behavior are deterministic in unavailable states
+- [ ] Persisted/URL postflop modes normalize to Preflop
+- [ ] No landing crashes when Spot Discovery is empty
+- [ ] CTA and guidance are deterministic for unavailable strategy states
 
-### Custom Mode
+### Custom Section on Landing
 - [ ] Custom flow reflects Strategy-style interaction conventions
 - [ ] Action progression/reset/retry behavior is stable
-- [ ] Custom sequence remains backed by real strategy next-actions API
+- [ ] Custom sequence remains backed by real next-actions API
 - [ ] Start Training uses accurate custom sequence state
 
-### Session Mapping + Quality
+### Quality Gates
 - [ ] `customConfig` mapping is reliable and fail-safe
-- [ ] Unit tests added/updated for all changed logic paths
+- [ ] Unit tests added/updated for changed landing logic
 - [ ] Targeted lint/tests pass for touched files
 
 ---
 
-## Timeline
-
-| Day | Focus | Deliverable |
-|-----|-------|-------------|
-| **Thu Feb 20** | Phase 1-A | Landing mode constraints + normalization |
-| **Thu Feb 20** | Phase 1-B (start) | Custom builder reuse refactor in progress |
-| **Fri Feb 21** | Phase 1-B + 1-C | Strategy-style custom UX + robustness fixes |
-| **Fri Feb 21** | Phase 1-D | Test updates + verification |
-| **Sat Feb 22** | Buffer | Bug fixes or polish from QA feedback |
-
----
-
-## Slack Message Template
+## Team Share Summary
 
 ```
-📢 Trainer V3 Landing Revamp Plan (Phase 1)
+Trainer V3 Landing Revamp Plan
 
-**Scope:**
-• Landing constrained to Preflop + Custom
-• Custom flow aligned with Strategy-style interaction patterns
-• Spot Discovery empty-state hardening (no-crash + clear guidance)
-• Reliable custom sequence → session payload mapping
-• Focused unit-test coverage for changed flows
+Scope:
+• Landing page only
+• Mode constrained to Preflop + Custom
+• Custom flow aligned with Strategy interaction patterns
+• Spot Discovery empty-state hardening on landing
+• Reliable custom sequence → customConfig mapping
 
-**Out of Scope (this pass):**
-• Villain range/matrix updates
-• Standard postflop landing modes
-• Broader training-view refactors
-
-**Execution Plan:**
-• Constrain modes + normalize persisted state
-• Refactor CustomSpotBuilder for Strategy-like UX behavior
-• Harden empty discovery and CTA/fallback states
-• Validate customConfig mapping and add tests
-
-cc @Product @QA
+Execution:
+• Constrain mode options + normalize persisted mode state
+• Refactor CustomSpotBuilder interactions with logical Strategy reuse
+• Harden landing empty states and CTA gating
+• Add focused tests for mode behavior and payload mapping
 ```
-
----
-
-## Next Phase Follow-ups
-
-1. Reintroduce gated postflop landing modes when Phase 2 scope is ready
-2. Hide/adjust villain range and matrix in training view per Phase 2 plan
-3. Expand end-to-end coverage for custom postflop sequences
-
----
-
-*Document generated: Feb 19, 2026*
