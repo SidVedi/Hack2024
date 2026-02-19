@@ -6,7 +6,7 @@
 
 ---
 
-## Why This Is a Revamp, Not Small Fixes
+## Why This Is a Revamp.
 
 The new UnifiedTrainer landing page was built with an optimistic design: it relies on Spot Discovery API + config cascade auto-correction to validate whether training can start. This is architecturally cleaner than the old trainer, but it **dropped critical edge-case handling** that the old Trainer V2 had.
 
