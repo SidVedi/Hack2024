@@ -1,203 +1,268 @@
 # Trainer V3 Landing Page Revamp
 
-**Target:** Phase 1 of the Trainer V3 Release Plan (tasks 1.1-1.7)
-**Scope:** Frontend-only, scoped to `components/UnifiedTrainer/` subtree
-**Estimated Total Effort:** ~15h
+**Target:** Phase 1 of the Trainer V3 Release Plan
+**Scope:** Frontend, `components/UnifiedTrainer/` subtree + shared hooks
+**Estimated Total Effort:** ~20h
 
 ---
 
-## Current State
+## Why This Is a Revamp, Not Small Fixes
 
-- **StreetSelector** (`components/UnifiedTrainer/Configuration/StreetSelector.tsx`) renders all 5 modes (Preflop, Flop, Turn, River, Custom). It supports a `disabledStreets` prop but has no mechanism to *hide* options entirely.
-- **SpotSelector** (`components/UnifiedTrainer/Configuration/SpotSelector.tsx`) shows both preflop and postflop spots based on `SPOTS_BY_DATABASE`. Postflop spots (SRP, 3BP, 4BP) should not appear in Phase 1.
-- **TrainerLanding** (`components/UnifiedTrainer/TrainerLanding.tsx`) drives the full config flow. It already computes `disabledStreets` from the database type (line 685) but does not hide streets outright.
-- **AdvancedSettingsModal** (`components/UnifiedTrainer/Configuration/AdvancedSettingsModal.tsx`) shows Board Filter, Randomize Board, and Difficulty regardless of training mode.
-- **CustomSpotBuilder** (`components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx`) is functionally complete -- fetches real strategy tree actions and builds sequences. However, its `buildBaseQueryParams()` diverges from the Strategies page's query building (`getSpinsGameConfigPayload` in `useGameTypeStrategiesPage.ts`) -- see Task 1.7.
-- **sessionConfigBuilder** (`components/UnifiedTrainer/utils/sessionConfigBuilder.ts`) has `buildCustomConfig()` reading from `playerActionsReducer` and `buildSessionConfig()` reading from Redux.
+The new UnifiedTrainer landing page was built with an optimistic design: it relies on Spot Discovery API + config cascade auto-correction to validate whether training can start. This is architecturally cleaner than the old trainer, but it **dropped critical edge-case handling** that the old Trainer V2 had.
 
----
+The old trainer (`components/Trainer/useTrainer.tsx`, `utils.ts`, `TrainerModalV2.tsx`) guarded against 7 categories of failure that the new landing page does not:
 
-## Strategy Page / Custom Mode Parity Analysis
+### 1. No Error UI When Config Fails to Load
 
-Both the Strategies page and CustomSpotBuilder call the same API (`/get-player-next-actions`) and use the same Redux slice (`playerActionsReducer`). The critical difference is **how they build query params**:
+**Old:** `waitForTrainerConfig()` polls up to 5 seconds for `researchBasedData` and blocks start if it fails. Shows explicit error.
 
-| Param | Strategies (`useGameTypeStrategiesPage`) | CustomSpotBuilder (`buildBaseQueryParams`) | Impact |
-|-------|---|---|---|
-| Core config (variant, numPlayers, stackInBB, BB, site, blindStructure, openRaise, research) | Yes | Yes | Aligned |
-| 3bet / 4bet | Yes | Yes | Aligned |
-| `selectedActionQuery()` | Yes | Yes | Aligned (same utility) |
-| boardCards | Yes | Yes (added separately) | Aligned |
-| BetRepresentation | Yes | **Missing** | Affects display format of bet sizes |
-| Per-street bet sizing (flopIPBets, flopIPRaises, etc.) | Yes | **Missing** | Could affect which bet options backend returns for postflop |
-| realTimeCalc (RTS) | Yes | **Missing** | RTS not needed for trainer, safe to omit |
+**New:** `trainerConfigError` is set in Redux but **has no UI**. The user sees a disabled Start button with no explanation. (`TrainerLanding.tsx` line 337-364 fetches config but never renders `trainerConfigError`.)
 
-The missing params don't affect preflop actions, but **do affect postflop** custom sequences. Task 1.7 addresses this.
+### 2. No Board Card Count Validation
 
----
+**Old:** Validates board cards are 0, 3, 4, or 5 before any API call. Invalid counts block the request.
 
-## Task 1.1 -- Hide Standard Postflop Modes (P0, ~2h)
+**New:** No validation in the landing page. Relies entirely on `SelectBoardCardsModal` to enforce counts, but nothing stops a malformed `cardSelection` array from reaching `buildCustomConfig()` or the session start API.
 
-**Goal:** Users see only "Preflop" and "Custom" in the street selector.
+### 3. Randomize Board Not Properly Gated
 
-**Approach:** Add a `hiddenStreets` prop to `StreetSelector` (distinct from `disabledStreets`) and filter `MODE_OPTIONS` before rendering. In `TrainerLanding`, pass `hiddenStreets={['flop', 'turn', 'river']}`.
+**Old:** Disables "Randomize Board" for:
+- Preflop-only training (forced Off)
+- Precision DB with non-check postflop actions (structural conflict)
 
-**Files:**
+**New:** `AdvancedSettingsModal` shows Randomize Board unconditionally. A user can set Randomize Board = "On" for preflop-only training, where it has no effect and could confuse the backend.
 
-- `components/UnifiedTrainer/Configuration/StreetSelector.tsx` -- add `hiddenStreets?: TrainingMode[]` prop; filter `MODE_OPTIONS` to exclude hidden items; adjust grid columns dynamically (`grid-cols-${visibleCount}`)
-- `components/UnifiedTrainer/TrainerLanding.tsx` -- pass `hiddenStreets` to `StreetSelector`
+### 4. No Config Rejection Recovery
 
-**Why not just filter MODE_OPTIONS statically?** A prop keeps StreetSelector reusable and makes re-enabling postflop in Phase 2 a one-line change (remove the prop).
+**Old:** `handlePlayerActionsRejected()` catches backend 400/500 errors, shows "Invalid Game configuration, resetting default values", resets all selectors, and sets `isInvalidConfig` flag.
 
----
+**New:** Session start errors are shown in an error banner (`errorMessage` prop), but there is no automatic reset-to-defaults flow. User must manually change settings to recover from a bad config.
 
-## Task 1.3 -- Fix Crash on Empty Spot Discovery (P0, ~2h)
+### 5. No Essential Config Values Guard
 
-**Goal:** Landing page does not crash when Spot Discovery returns 0 scenarios.
+**Old:** Checks `selectedCasino`, `selectedBB`, `selectedPlayers`, `selectedStack` exist before making API calls. Skips call if any are missing.
 
-**Current behavior:** `spotDiscovery.scenarios` can be empty when the backend has no strategies for the current config. The code already handles this for the Start button gate (`isSelectedSpotAvailable`) but there may be unguarded `.find()` / `.map()` calls.
+**New:** `buildSessionConfig()` falls back to `CANONICAL_TRAINER_DEFAULTS` with a console warning (line 283-293), but proceeds anyway. This can send incorrect config to the backend (e.g., default 6-player when user intended 2-player but the URL sync hadn't completed).
 
-**Approach:**
+### 6. Position Validation Is Purely API-Dependent
 
-- Audit `TrainerLanding.tsx` for every access to `spotDiscovery.scenarios` -- add null/empty guards
-- Audit `getDiscoveryAvailablePositions()` -- already returns `[]` on empty, which is safe
-- Audit `discoveryToFrontendSpotSet()` -- verify it returns `null` (not an empty Set) for empty scenarios so the "no constraint" fallback works
-- Add a user-visible fallback message when no scenarios are available ("No strategies found for this configuration")
+**Old:** Has explicit spot-specific position validation functions (`validateUnopenedSpot()`, `validateVsRfiSpot()`, etc.) that work offline. These are deterministic rules that don't require an API call.
 
-**Files:**
+**New:** Relies entirely on Spot Discovery API `availablePositions`. If the API is slow, fails, or returns empty, there's no fallback -- positions appear unvalidated.
 
-- `components/UnifiedTrainer/TrainerLanding.tsx` -- add guards + fallback UI
-- `components/UnifiedTrainer/hooks/useTrainerLandingConfig.ts` -- ensure no crash if the auto-correction effects receive empty data
-- `components/UnifiedTrainer/utils/spotDiscoveryMapping.ts` -- verify edge case behavior
+### 7. RTS Not Integrated in Custom Mode
 
-**Test:** Add a pure-logic test (like the existing `TrainerLanding.configValidation.test.ts` pattern) that verifies no exception is thrown when scenarios are `[]`.
+**Old (Strategies page):** Sends `realTimeCalc=true` when conditions are met (NLH from flop, PLO on river). This enables on-demand solving for boards without precomputed strategies.
+
+**New (CustomSpotBuilder):** Does not send `realTimeCalc` at all. For NLH custom spots that build into postflop, this means:
+- Only precomputed boards work
+- Boards without precomputed solutions silently fail or show `noSolutionForBoard`
+- The `noSolutionForBoard` message exists (line 707-720) but doesn't offer RTS as an alternative
+
+### 8. Complete Dead-End Config Not Communicated
+
+**New issue:** The config cascade in `useTrainerGameConfig` can reach a state where ALL options at a cascade layer are empty (e.g., switching to a simulation type with no data for the current player count). When this happens:
+- `isCurrentConfigValid` is false
+- Start button is disabled
+- The validation message says "No strategy data for this configuration"
+- But **which** setting is wrong is not communicated -- the user has no guidance
 
 ---
 
-## Task 1.7 -- Align Custom Mode with Strategies Page API Flow (P0, ~3h)
+## Task Breakdown
 
-**Goal:** CustomSpotBuilder must produce the **exact same API query** as the Strategies page for the same configuration, so users get identical action options in both places.
+### Task 1.1 -- Hide Standard Postflop Modes `[HIDE]` (P0, ~2h)
 
-**Problem:** CustomSpotBuilder's `buildBaseQueryParams()` builds a simpler query than the Strategies page's `getSpinsGameConfigPayload()`. Both call `/get-player-next-actions` but with different params -- which means the backend could return different available actions (especially for postflop bet sizing).
+**Problem:** Phase 1 only supports preflop + custom mode. Flop/Turn/River dropdown options are visible but lead to incomplete flows.
 
-**Approach: Extract shared query builder**
+**Change:**
+- Add `hiddenStreets?: TrainingMode[]` prop to `StreetSelector.tsx` -- filter `MODE_OPTIONS`, adjust grid columns
+- `TrainerLanding.tsx` passes `hiddenStreets={['flop', 'turn', 'river']}`
+- Remove postflop pot type auto-correction effects (dead code when postflop is hidden)
+- Remove postflop hero position correction effects (same reason)
 
-1. Create a shared utility `buildStrategyQueryParams(config)` that both the Strategies page and CustomSpotBuilder can call. This replaces CustomSpotBuilder's `buildBaseQueryParams()` with the same logic the Strategies page uses.
-2. The shared function takes a config object with: `variant`, `numPlayers`, `stackInBB`, `BB`, `game`, `site`, `blindStructure`, `openRaise`, `research`, `3bet`, `4bet`, plus optional `BetRepresentation` and bet sizing params.
-3. CustomSpotBuilder calls the shared builder, passing its props. The Strategies page refactors to also call it (or we extract from `getSpinsGameConfigPayload` -- whichever is smaller diff).
-
-**Key params to add to CustomSpotBuilder:**
-
-- `BetRepresentation` -- read from Redux `gameReducer.betRepresentation` (like Strategies does)
-- Per-street bet sizing -- read from Redux `trainerReducer` or use defaults matching what Strategies sends
-
-**Files:**
-
-- New: `utils/buildStrategyQueryParams.ts` (or co-locate in `components/PlayerActions/utils.ts`)
-- `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` -- replace `buildBaseQueryParams()` with shared builder
-- `hooks/useGameTypeStrategiesPage.ts` -- verify parity (minimal change -- just confirm the shared builder matches)
-
-**Test:** Unit test that both the old Strategies query and the new shared builder produce identical param strings for the same input config.
+**Files:** `StreetSelector.tsx`, `TrainerLanding.tsx`
 
 ---
 
-## Task 1.2 -- Verify Custom Mode End-to-End (P0, ~3h)
+### Task 1.2 -- Config Load Error UI `[FIX]` (P0, ~2h)
 
-**Goal:** Confirm Custom mode works from landing through session start, using the shared query builder from Task 1.7.
+**Problem:** When `getTrainerGamesConfig()` fails, `trainerConfigError` is set in Redux but the landing page shows no error. User sees a disabled Start button with no explanation. (Gap #1)
 
-**Approach:** Manual + automated verification of the CustomSpotBuilder flow:
+**Change:**
+- Read `trainerConfigError` from Redux (already selected at line 343)
+- Show error banner when `trainerConfigError` is truthy: "Failed to load trainer configuration. Please refresh or try again."
+- Add retry button that re-dispatches `getTrainerGamesConfig()`
+- Disable all config selectors while config is loading (loading skeleton state)
 
-- CustomSpotBuilder loads initial actions from `/get-player-next-actions` using the shared query builder
-- User builds action sequence (fold/call/raise per position)
-- Board card selection works for postflop-capable databases
-- "Start Training" dispatches correct Redux state and `buildCustomConfig()` produces valid `customConfig`
-- **Parity check**: Same config in Strategies page and Custom mode produce the same initial actions from the API
-
-**Files to verify/fix:**
-
-- `components/UnifiedTrainer/Configuration/CustomSpot/CustomSpotBuilder.tsx` -- uses shared query builder (from 1.7)
-- `components/UnifiedTrainer/utils/sessionConfigBuilder.ts` -- verify `buildCustomConfig()` reads `selectedActions` and `cardSelection` correctly
-- `components/UnifiedTrainer/TrainerLanding.tsx` -- verify `handleStartTraining()` dispatches all required Redux state for custom mode (lines 727-829)
-
-**Test:** Add a unit test for `buildCustomConfig()` with mocked Redux state containing preflop + flop actions and board cards.
+**Files:** `TrainerLanding.tsx`
 
 ---
 
-## Task 1.6 -- Verify Custom Config to Session Config Mapping (P0, ~2h)
+### Task 1.3 -- Guard Against Empty Spot Discovery `[FIX]` (P0, ~2h)
 
-**Goal:** `buildCustomConfig()` correctly maps CustomSpotBuilder state to `TrainerSessionConfig.customConfig`.
+**Problem:** Spot Discovery returning 0 scenarios disables the Start button, but:
+- No distinction between "still loading" vs "loaded but empty"
+- No guidance on what to change
+- API failure is silent
 
-**Verification checklist:**
+**Change:**
+- Add explicit error UI when `spotDiscovery.error` is set
+- Differentiate "loading" (spinner) vs "no strategies" (amber warning with suggestions) vs "API error" (red warning with retry)
+- When `scenarios.length === 0` and not loading, show: "No strategies found. Try changing [Site], [Stack], or [Simulation] in Advanced Settings."
+- Guard all `spotDiscovery.scenarios` access paths against empty/null
 
-- `selectedActions.Preflop` actions are joined as comma-separated string (e.g., `"r35,c,f"`)
-- `selectedActions.Flop/Turn/River` are included when present
-- `cardSelection` board cards are concatenated and validated (regex + duplicate check)
-- `buildSessionConfig()` sets `trainingMode: 'custom'` and attaches `customConfig`
-- `handleStartTraining()` in TrainerLanding dispatches `setSelectedTrainingMode('custom')` -- confirmed at line 816
-
-**Files:**
-
-- `components/UnifiedTrainer/utils/sessionConfigBuilder.ts` -- review `buildCustomConfig()` (lines 364-414)
-- Add unit tests for `buildCustomConfig()` and `buildSessionConfig()` with custom mode Redux state
+**Files:** `TrainerLanding.tsx`, `useSpotDiscovery.ts` (verify error propagation)
 
 ---
 
-## Task 1.4 -- Validate Player Count + Spot Combinations (P1, ~1h)
+### Task 1.4 -- Board Card Count Validation `[FIX]` (P0, ~1.5h)
 
-**Goal:** Spots that require more players than currently selected are properly disabled.
+**Problem:** No validation of `cardSelection` before it reaches `buildCustomConfig()` or the session start API. Malformed board state (e.g., 1 or 2 cards) could cause backend errors. (Gap #2)
 
-**Current behavior:** `SpotSelector` already has `minPlayers` enforcement and `isSpotCompatibleWithHeroes()` validation. This task is mostly verification + edge-case hardening.
+**Change:**
+- In `buildCustomConfig()` (`sessionConfigBuilder.ts`): validate board card count is 0, 3, 4, or 5 before including `boardCards` in the config. Log warning and omit if invalid.
+- In `TrainerLanding.tsx` `handleStartTraining()`: validate board cards before dispatching. Show error if count is invalid (e.g., "Please select 3 cards for flop or clear the board").
+- In Custom mode: `CustomSpotBuilder` already enforces via the `BoardCard` component, but add a guard in `handleActionClick` street transition logic.
 
-**Approach:**
-
-- Verify `squeeze` (minPlayers: 3) is disabled at 2 players -- already enforced via `SPOT_REGISTRY`
-- Verify `setPlayerCount` in `useTrainerLandingConfig.ts` auto-switches from `squeeze` to `vsOpen` when count drops below 3 -- already implemented (line 363)
-- Test: spot buttons at 2-player count show `squeeze` as disabled with correct tooltip
-
-**Files:**
-
-- `components/UnifiedTrainer/Configuration/SpotSelector.tsx` -- verify, likely no changes needed
-- Existing test in `TrainerLanding.configValidation.test.ts` -- extend with player count validation cases
+**Files:** `sessionConfigBuilder.ts`, `TrainerLanding.tsx`, `CustomSpotBuilder.tsx`
 
 ---
 
-## Task 1.5 -- Hide Irrelevant Advanced Settings (P2, ~2h)
+### Task 1.5 -- Randomize Board Gating `[FIX]` (P1, ~1h)
 
-**Goal:** Advanced Settings modal only shows settings that matter for preflop/custom training.
+**Problem:** Randomize Board is shown and editable for preflop-only training where it has no effect. For precision DB with non-check postflop actions, it creates a structural conflict. (Gap #3)
 
-**What to hide:**
+**Change:**
+- `AdvancedSettingsModal.tsx`: Add `trainingMode` prop. Hide Randomize Board when `trainingMode === 'preflop'`. Disable when precision DB + postflop non-check actions.
+- Force `randomizeBoard: 'Off'` in `buildSessionConfig()` when `trainingMode === 'preflop'`.
+- `TrainerLanding.tsx`: Pass `trainingMode` to the modal.
 
-- **Board Filter panel** -- already conditionally shown via `isPostflop` prop, but should also be hidden when `trainingMode === 'custom'` and no board cards are selected (currently guarded by `onBoardFilterChange` existence)
-- **Randomize Board** -- irrelevant for preflop-only training; show only when training mode could produce boards
-- **Difficulty** -- keep (applies to all modes)
-- **Simulation / Site / BB / Stack / Blinds / Open Raise** -- keep (all affect strategy lookup)
-
-**Files:**
-
-- `components/UnifiedTrainer/Configuration/AdvancedSettingsModal.tsx` -- add `trainingMode` prop; conditionally render Board Filter and Randomize Board
-- `components/UnifiedTrainer/TrainerLanding.tsx` -- pass `trainingMode` to the modal
+**Files:** `AdvancedSettingsModal.tsx`, `TrainerLanding.tsx`, `sessionConfigBuilder.ts`
 
 ---
 
-## Test Plan Summary
+### Task 1.6 -- Essential Config Values Guard `[FIX]` (P0, ~1.5h)
 
-- Extend `TrainerLanding.configValidation.test.ts` with empty-discovery and player-count edge cases
-- Add `sessionConfigBuilder.test.ts` covering `buildCustomConfig()` and `buildSessionConfig()` for preflop and custom modes
-- Add `buildStrategyQueryParams.test.ts` verifying parity with Strategies page query output
-- All tests use MSW for API mocking per project conventions
-- Run `pnpm test -- --testPathPattern="UnifiedTrainer"` to verify
+**Problem:** `buildSessionConfig()` silently defaults to canonical values when Redux state is empty (e.g., URL sync race). This can send wrong config to the backend. (Gap #5)
+
+**Change:**
+- In `handleStartTraining()`: Check that essential values are populated in Redux BEFORE calling `onStartTraining()`. If any are missing, show error: "Configuration not ready. Please wait or refresh."
+- Essential values: `selectedPlayers`, `selectedCasino`, `selectedBB`, `selectedStack`
+- This mirrors the old trainer's `hasEssentialConfigValues` check.
+
+**Files:** `TrainerLanding.tsx`
+
+---
+
+### Task 1.7 -- Fallback Position Validation `[FIX]` (P1, ~2h)
+
+**Problem:** Position validation relies entirely on Spot Discovery API. If API is slow, fails, or returns empty `availablePositions`, there's no fallback. (Gap #6)
+
+**Change:**
+- Port the old trainer's deterministic position validation rules from `components/Trainer/utils.ts` (`validateUnopenedSpot`, `validateVsRfiSpot`, etc.) into the new `SpotSelector.tsx` as a fallback.
+- When `availableHeroPositions` from Spot Discovery is empty, fall back to these rules.
+- The rules are: RFI hero != BB; vsOpen hero needs someone before; vs3Bet hero can't be last; vs4Bet hero needs someone before; squeeze hero needs 2 before.
+- Note: `isSpotCompatibleWithHeroes()` already exists in `SpotSelector.tsx` (lines 57-76) with the same rules. Verify it's used as a fallback when discovery data is absent.
+
+**Files:** `SpotSelector.tsx`, `TrainerLanding.tsx`
+
+---
+
+### Task 1.8 -- RTS Integration for Custom Mode `[FIX]` (P1, ~3h)
+
+**Problem:** CustomSpotBuilder doesn't send `realTimeCalc` param. For NLH custom spots going into postflop, only precomputed boards work. The `noSolutionForBoard` message appears but doesn't offer RTS as a fallback. (Gap #7)
+
+**Change:**
+- Import `shouldEnableRealTimeCalc` from `utils/gameUtils.ts` into `CustomSpotBuilder.tsx`
+- Add `realTimeCalc` to `buildBaseQueryParams()` when conditions are met (variant + board card count)
+- When `noSolutionForBoard` is true and RTS is available, show "Computing strategy..." instead of "No precomputed solution" and trigger RTS calculation
+- When RTS is not available (PLO preflop/flop/turn), keep current message
+
+**Files:** `CustomSpotBuilder.tsx`, potentially `hooks/rts/` integration
+
+**Note:** This can be scoped down for Phase 1 -- at minimum, add `realTimeCalc` param to the query. Full RTS WebSocket integration can follow.
+
+---
+
+### Task 1.9 -- Dead-End Config Guidance `[FIX]` (P2, ~1.5h)
+
+**Problem:** When config cascade reaches a dead end (all options empty at a layer), the user sees "No strategy data for this configuration" with no guidance on which setting to change. (Gap #8)
+
+**Change:**
+- Extend `useTrainerGameConfig` to return `deadEndLayer?: string` indicating which cascade layer has no options (e.g., "site", "bb", "stack")
+- In `TrainerLanding.tsx` validation message: "No strategies for [current site] with [current simulation]. Try changing {deadEndLayer} in Advanced Settings."
+- Highlight the Settings icon when config is invalid to draw attention to Advanced Settings.
+
+**Files:** `useTrainerGameConfig.ts`, `TrainerLanding.tsx`
+
+---
+
+### Task 1.10 -- Align CustomSpotBuilder Query Params `[FIX]` (P0, ~1.5h)
+
+**Problem:** CustomSpotBuilder's `buildBaseQueryParams()` is missing `BetRepresentation` and per-street bet sizing params that the Strategies page sends. Postflop custom sequences may get different bet options.
+
+**Change:**
+- Add `BetRepresentation` to `buildBaseQueryParams()` -- read from Redux `gameReducer.betRepresentation`
+- Add per-street bet sizing defaults -- read from Redux or use same defaults as Strategies page
+- No new files, no shared utility extraction -- just add the missing params (~10-15 lines)
+
+**Files:** `CustomSpotBuilder.tsx`
+
+---
+
+### Task 1.11 -- Verify Custom Config Pipeline `[VERIFY]` (P0, ~2h)
+
+**What to verify (all existing code):**
+- `buildCustomConfig()` joins `selectedActions.Preflop` as comma-separated string
+- Flop/Turn/River actions included when present
+- Board cards validated and concatenated
+- `buildSessionConfig()` sets `trainingMode: 'custom'` + attaches `customConfig`
+- `handleStartTraining()` dispatches `setSelectedTrainingMode('custom')`
+
+**Test:** Add `sessionConfigBuilder.test.ts` covering `buildCustomConfig()` and `buildSessionConfig()` for preflop + custom modes with mocked Redux state.
+
+**Files:** `sessionConfigBuilder.ts` (review only), new test file
+
+---
+
+## Summary
+
+| Task | Nature | Gap Addressed | Priority | Effort |
+|------|--------|---------------|----------|--------|
+| 1.1 Hide postflop modes | HIDE | Phase 1 scope | P0 | 2h |
+| 1.2 Config load error UI | FIX | Gap #1: Silent config failure | P0 | 2h |
+| 1.3 Empty discovery handling | FIX | Gap #8 partial: No feedback | P0 | 2h |
+| 1.4 Board card validation | FIX | Gap #2: No count validation | P0 | 1.5h |
+| 1.5 Randomize board gating | FIX | Gap #3: Shown when irrelevant | P1 | 1h |
+| 1.6 Essential config guard | FIX | Gap #5: Silent defaults | P0 | 1.5h |
+| 1.7 Fallback position rules | FIX | Gap #6: API-only validation | P1 | 2h |
+| 1.8 RTS for custom mode | FIX | Gap #7: No RTS in custom | P1 | 3h |
+| 1.9 Dead-end config guidance | FIX | Gap #8: No guidance | P2 | 1.5h |
+| 1.10 Query param alignment | FIX | Strategy page parity | P0 | 1.5h |
+| 1.11 Verify custom pipeline | VERIFY | Confidence | P0 | 2h |
 
 ---
 
 ## Execution Order
 
-1. **1.1** (Hide postflop) -- unblocks visual testing of the landing page
-2. **1.3** (Empty discovery guards) -- defensive, prevents crashes during later testing
-3. **1.7** (Strategy parity) -- extract shared query builder before verifying Custom mode
-4. **1.2** (Custom mode E2E) -- verify with the shared builder in place
-5. **1.6** (Config mapping) -- verify session config pipeline
-6. **1.4** (Player/spot validation) -- P1 hardening
-7. **1.5** (Advanced settings cleanup) -- P2 polish
-8. **Tests** -- throughout, but final pass at the end
+**Day 1 -- P0 (unblock training):**
+1. **1.1** Hide postflop modes (unblocks visual testing)
+2. **1.2** Config load error UI (users can see what's wrong)
+3. **1.6** Essential config guard (prevent bad payloads)
+4. **1.10** Query param alignment (Custom mode parity)
+5. **1.11** Verify custom pipeline + add tests
+
+**Day 2 -- P0 continued + P1:**
+6. **1.3** Empty discovery handling (better feedback)
+7. **1.4** Board card validation (defensive)
+8. **1.7** Fallback position rules (offline validation)
+9. **1.5** Randomize board gating (cleanup)
+10. **1.8** RTS for custom mode (at minimum: add param)
+
+**Day 3 -- P2 + polish:**
+11. **1.9** Dead-end config guidance (UX polish)
+12. Final test pass
 
 ---
 
