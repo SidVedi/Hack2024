@@ -126,11 +126,35 @@ The Custom Spot Builder already calls `/get-player-next-actions` — the same en
 1. **On the trainer landing page** — User configures game settings, builds the action sequence using the horizontal builder, selects board cards, and starts training. Self-contained experience.
 2. **From the Strategy page** — User clicks "Train" on the Strategy page. The current config (actions, board cards, game settings) transfers to the trainer via a deep link, pre-populating the Custom Spot Builder. No re-configuration needed.
 
-### 4. Backend: No Changes Required
+### 4. Hand Generation: V1/V2 APIs + V3 Session Persistence
 
-The V3 backend (`POST /trainer/v3/session/start`) remains unchanged. It already accepts a `customConfig` payload with `preflopActions`, `flopActions`, `boardCards`, etc. — which is exactly what Custom Mode produces.
+To further align with proven infrastructure, hand generation during gameplay will use the same V1 and V2 endpoints that have been running in production — while V3 continues to handle session management, statistics, history, and replayer integration.
 
-This rework is **frontend-only**.
+**How it works:**
+
+1. **Session creation** — `POST /trainer/v3/session/start` creates the session row (with a new `skipGeneration: true` flag). No hands are generated server-side.
+2. **Hand dealing** — The frontend calls V1 or V2 hand generation endpoints directly:
+   - **Preflop mode** → `GET /trainer/generate-next-hand` (V1) — simple, fast, proven
+   - **Custom mode** → `GET /trainer/v2/generate-next-hand` (V2) — supports full action sequences, board cards, and site-specific configs
+3. **Hand saving** — After the user plays each hand, results are saved via the existing `POST /trainer/v3/session/{id}/hands` endpoint, including a `replayContext` field for replayer integration.
+4. **Session end** — The existing `POST /trainer/v3/session/{id}/end` closes the session and returns a summary.
+
+**Why this is better than V3 server-side generation:**
+
+- V1 and V2 hand generation endpoints are the same ones that power Trainer V1 and Trainer V2 in production — battle-tested with well-understood behavior.
+- V3's server-side generation pipeline involves a multi-step chain (native path → strategy platform → board sampling → thread pool → transform). Bypassing it removes an entire category of potential issues without losing any functionality.
+- Session management, statistics, hand history, and replayer all read from `TrainerHandResult` rows — they do not depend on how the hand was generated.
+
+**Backend changes required (minimal):**
+
+| Change | Description | Risk |
+|--------|-------------|------|
+| `skipGeneration` flag on session start serializer | Allows session creation without server-side hand generation | None — additive, defaults to `false` |
+| Skip generation path in `StartSessionView` | Early return with empty hands array when flag is true | None — existing path untouched |
+| `replayContext` fallback in `SaveHandResultsView` | Accept replay data from request body (V2 hands are not cached server-side) | None — falls back to existing cache first |
+| `replayContext` field on `HandResultSerializer` | Validate the new optional field | None — optional field |
+
+Zero model changes. Zero migrations. Fully backward-compatible — removing the `skipGeneration` flag reverts to the existing V3 generation pipeline.
 
 ---
 
@@ -165,12 +189,16 @@ For Preflop mode, this is not a concern — the hand ends before postflop, so po
 - User preferences persistence
 - Shareable URL support
 - Difficulty selector
-- The entire gameplay loop (everything after "Start Training")
-- All backend endpoints
+- The entire gameplay loop UI (everything after "Start Training")
+- V3 session lifecycle endpoints (start, save hands, end, statistics, history)
+- V1/V2 hand generation endpoints (no changes)
+- `TrainerSession` and `TrainerHandResult` models (no migrations)
 
 ---
 
-## Shared Endpoint Summary
+## Endpoint Summary
+
+### Configuration (shared with Strategy page)
 
 | Endpoint | Used By | Purpose |
 |----------|---------|---------|
@@ -178,7 +206,24 @@ For Preflop mode, this is not a concern — the hand ends before postflop, so po
 | `GET /get-player-next-actions` | Strategy page, Trainer (Custom mode) | Fetch available actions at each decision point in the strategy tree |
 | `GET /new-game-configuration` | Strategy page, Trainer (Custom mode) | Validate config and fetch strategy data for a specific game setup |
 
-By routing both the Strategy page and the Trainer through the same endpoints, any improvement to these APIs benefits both surfaces automatically.
+By routing both the Strategy page and the Trainer through the same configuration endpoints, any improvement to these APIs benefits both surfaces automatically.
+
+### Hand generation (proven V1/V2 endpoints)
+
+| Endpoint | Used By | Purpose |
+|----------|---------|---------|
+| `GET /trainer/generate-next-hand` | Trainer (Preflop mode) | Generate a single preflop training hand — same as production Trainer V1 |
+| `GET /trainer/v2/generate-next-hand` | Trainer (Custom mode) | Generate a hand with full action sequence + board cards — same as production Trainer V2 |
+
+### Session lifecycle (V3 — minimal changes)
+
+| Endpoint | Change | Purpose |
+|----------|--------|---------|
+| `POST /trainer/v3/session/start` | Add `skipGeneration` flag | Create session row; hand generation handled by V1/V2 endpoints above |
+| `POST /trainer/v3/session/{id}/hands` | Accept `replayContext` from body | Save hand results + replay data for replayer integration |
+| `POST /trainer/v3/session/{id}/end` | No change | End session, return summary |
+| `GET /trainer/v3/statistics` | No change | Aggregated training statistics |
+| `GET /trainer/v3/sessions` | No change | Session history |
 
 ---
 
@@ -205,10 +250,14 @@ This allows users to seamlessly move from browsing a strategy to training on tha
 | Stabilizing Custom Spot Builder API calls | Medium | The builder already calls the correct endpoint — work is aligning query parameters and resolving edge cases, not a rewrite |
 | Aligning board card modal | Low | Adopting an existing, well-tested component |
 | Deep link enhancement | Low | Additive change to an existing working mechanism |
+| Hybrid hand generation (V1/V2 + V3 sessions) | Low | V1/V2 endpoints are proven in production; backend changes are additive with zero migrations; `skipGeneration` defaults to false for full backward compatibility |
+| V2 → V3 hand format transform on frontend | Medium | Mirrors the existing backend transform; needs thorough testing to ensure hand actions, pot sizes, and replay data map correctly |
 
 ---
 
 ## Implementation Steps
+
+### Landing page (frontend)
 
 1. Consolidate StreetSelector to 2 modes (Preflop | Custom), remove standalone Flop/Turn/River
 2. Wire Preflop mode with Strategy page config selectors and preflop spot picker
@@ -220,4 +269,18 @@ This allows users to seamlessly move from browsing a strategy to training on tha
 8. Enhance deep link to carry full action sequence and board cards for Custom mode pre-population
 9. Remove standalone postflop mode code (spot discovery for individual streets, postflop pot type selector)
 10. Streamline `TrainerLanding.tsx` conditional rendering for 2 modes
-11. Update unit tests for reworked landing page
+
+### Hand generation (frontend + backend)
+
+11. Backend: Add `skipGeneration` flag to session start serializer and view
+12. Backend: Accept `replayContext` from request body in save hand results view
+13. Frontend: Create V2 API service function to call V1/V2 hand generation endpoints
+14. Frontend: Build V2 → V3 hand format transformer (mirrors backend `transforms.py`)
+15. Frontend: Wire session start to use `skipGeneration: true`, generate hands via V1/V2
+16. Frontend: Include `replayContext` when saving hand results
+
+### Testing
+
+17. Update unit tests for reworked landing page
+18. Test hybrid hand generation flow end-to-end (session start → V1/V2 hand → play → save → end)
+19. Verify statistics, hand history, and replayer work correctly with hybrid-generated hands
