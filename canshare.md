@@ -24,7 +24,7 @@ Trainer V1 (preflop config + spot selection) and Trainer V2 (strategy-driven cus
 
 ### 4. Shared endpoints reduce integration risk
 
-By reusing the Strategy page's endpoints (`/games-new-config`, `/get-player-next-actions`) and UI components (`PlayerActionsMenu`, `SelectBoardCardsModal`), we eliminate a class of bugs where the trainer and the strategy browser show different configuration options or produce different results for the same setup.
+By reusing the Strategy page's endpoints (`/games-new-config`, `/get-player-next-actions`) and config cascade logic, we eliminate a class of bugs where the trainer and the strategy browser show different configuration options or produce different results for the same setup.
 
 ---
 
@@ -33,7 +33,7 @@ By reusing the Strategy page's endpoints (`/games-new-config`, `/get-player-next
 Simplify the landing page to two training modes:
 
 - **Preflop** — V1-style config-driven flow. User selects game settings, preflop spot (RFI, Facing Open, Facing 3-Bet, etc.), and hero/villain positions.
-- **Custom** — V2-style strategy-driven flow. User navigates the action tree (same UX as the Strategy page), selects board cards, and trains on any street at any spot — with full control over the exact scenario.
+- **Custom** — V2-style strategy-driven flow. User builds the exact action sequence, selects board cards, and trains on any street at any spot — with full control over the scenario.
 
 ---
 
@@ -44,8 +44,8 @@ flowchart TB
   subgraph current ["Current V3 Landing (replacing)"]
     SS["StreetSelector: 5 modes"]
     SD["SpotDiscovery API"]
-    CSB["Custom action builder"]
     TGC["Trainer-specific config endpoint"]
+    PF["Standalone postflop street modes with pot-type inference"]
   end
 
   subgraph reworked ["Reworked V3 Landing"]
@@ -56,14 +56,14 @@ flowchart TB
       POS["Hero / Villain Position Selector"]
     end
     subgraph custom ["Custom Mode"]
-      PAM["PlayerActionsMenu (shared with Strategies)"]
-      BCM["Board Card Selector (shared with Strategies)"]
+      CSB["V3 Custom Spot Builder UI (horizontal action sequence)"]
+      BCM["Board Card Selector"]
       GC2["Game Config (same selectors)"]
       DL["Deep-link from Strategy page Train button"]
     end
   end
 
-  subgraph endpoints ["Shared Endpoints"]
+  subgraph endpoints ["Shared Endpoints (same as Strategy page)"]
     GNC["GET /games-new-config"]
     GPNA["GET /get-player-next-actions"]
     NGC["GET /new-game-configuration"]
@@ -98,18 +98,33 @@ When the user selects "Preflop", show a clean configuration form:
 - **Difficulty** selector
 - **Config endpoint**: `GET /games-new-config` (same as Strategy page), replacing the trainer-specific `GET /trainer/trainer-games-config`
 
-### 3. Custom Mode (V2 + Strategy Page UX)
+### 3. Custom Mode (V3 UI + Strategy Page APIs)
 
-When the user selects "Custom", embed the Strategy page's action navigation directly in the trainer landing:
+When the user selects "Custom", the V3 Custom Spot Builder UI is shown — the horizontal, GTO Wizard-style action sequence with position cards, board card selectors, and progressive disclosure of actions per street.
 
-- **Action tree navigation** (`PlayerActionsMenu`) — the same component used on the Strategy page. Users click through the action sequence just as they would when browsing strategies.
-- **Board card selector** (`SelectBoardCardsModal`) — same popup used on the Strategy page for selecting flop/turn/river cards.
-- **Game config dropdowns** — same shared selectors as Preflop mode.
+**What stays (V3 UI/UX):**
+
+- The horizontal action sequence layout (PositionCard + BoardCard components)
+- Progressive disclosure: preflop actions appear first, postflop streets reveal as the sequence progresses
+- Board card selection inline with the action sequence
+- Hand-over detection and winner display
+- Database-aware constraints (preflop-only, full tree, precision)
+- Reset button and loading/error states
+
+**What is stabilized (API alignment with Strategy page):**
+
+The Custom Spot Builder already calls `/get-player-next-actions` — the same endpoint the Strategy page uses. The stabilization work ensures this integration is robust:
+
+- **Config endpoint**: Switch from `GET /trainer/trainer-games-config` to `GET /games-new-config` (same as Strategy page) so the game config dropdowns draw from the same data source
+- **Board card modal**: Reuse the Strategy page's `SelectBoardCardsModal` so board card selection behavior is identical
+- **Config cascade**: Align with the Strategy page's `useGameConfig` cascade logic to ensure available options (sites, BBs, stacks, etc.) are consistent
+- **Query parameter construction**: Ensure the `CustomSpotBuilder` constructs its `/get-player-next-actions` queries identically to the Strategy page — same parameter names, same defaults, same research type mapping
+- **Fix known edge cases**: Resolve the unhappy paths in the current Custom Spot Builder (auto-correction loops, state synchronization issues between advanced settings and the action builder)
 
 **Two ways to enter Custom mode:**
 
-1. **On the trainer landing page** — User configures game settings, builds the action sequence, selects board cards, and starts training. Self-contained experience.
-2. **From the Strategy page** — User clicks "Train" on the Strategy page. The current config (actions, board cards, game settings) transfers to the trainer via a deep link. No re-configuration needed.
+1. **On the trainer landing page** — User configures game settings, builds the action sequence using the horizontal builder, selects board cards, and starts training. Self-contained experience.
+2. **From the Strategy page** — User clicks "Train" on the Strategy page. The current config (actions, board cards, game settings) transfers to the trainer via a deep link, pre-populating the Custom Spot Builder. No re-configuration needed.
 
 ### 4. Backend: No Changes Required
 
@@ -125,9 +140,10 @@ This rework is **frontend-only**.
 |---------------------|---------------------|
 | 5 street modes with different config flows | 2 clear modes: Preflop and Custom |
 | Postflop training requires backend to infer action sequences | Users build exact sequences from real solver data |
-| Custom spot builder with separate implementation from Strategy page | Same action navigation UX as the Strategy page |
-| Board card selection built from scratch | Same board card popup as the Strategy page |
 | Trainer-specific config endpoint with its own edge cases | Shared config endpoint, same data as Strategy page |
+| Board card selection with separate implementation | Board card popup consistent with the Strategy page |
+| Config cascade with trainer-specific validation logic | Config cascade aligned with Strategy page — one source of truth |
+| Custom builder calls same API but with inconsistent query construction | Query construction aligned with Strategy page for consistent results |
 
 ---
 
@@ -135,6 +151,7 @@ This rework is **frontend-only**.
 
 - Poker table preview on the landing page
 - Config summary bar (Database | Stake | Site | Stack)
+- Custom Spot Builder visual design (horizontal action sequence, position cards, board cards)
 - User preferences persistence
 - Shareable URL support
 - Difficulty selector
@@ -143,16 +160,15 @@ This rework is **frontend-only**.
 
 ---
 
-## Component Reuse Summary
+## Shared Endpoint Summary
 
-| Capability | Reused From | Source |
-|-----------|------------|--------|
-| Game config dropdowns | Strategy page | `components/GameConfiguration/` |
-| Config cascade validation | Strategy page | `hooks/useGameConfig.ts` |
-| Action tree navigation | Strategy page | `components/PlayerActions/PlayerActionsMenu.tsx` |
-| Board card selector | Strategy page | `components/Modals/SelectBoardCardsModal.tsx` |
-| Config data endpoint | Strategy page | `GET /games-new-config` |
-| Action tree endpoint | Strategy page | `GET /get-player-next-actions` |
+| Endpoint | Used By | Purpose |
+|----------|---------|---------|
+| `GET /games-new-config` | Strategy page, Trainer (both modes) | Fetch available game configurations (sites, BBs, stacks, etc.) |
+| `GET /get-player-next-actions` | Strategy page, Trainer (Custom mode) | Fetch available actions at each decision point in the strategy tree |
+| `GET /new-game-configuration` | Strategy page, Trainer (Custom mode) | Validate config and fetch strategy data for a specific game setup |
+
+By routing both the Strategy page and the Trainer through the same endpoints, any fix or improvement to these APIs benefits both surfaces automatically.
 
 ---
 
@@ -165,7 +181,7 @@ The Strategy page's "Train" button currently passes preflop spot and game config
 - Active street
 - Research / simulation type
 
-This allows users to seamlessly move from browsing a strategy to training on that exact spot — Custom mode pre-populates with the full configuration.
+This allows users to seamlessly move from browsing a strategy to training on that exact spot — Custom mode pre-populates with the full configuration and the user can start training immediately.
 
 ---
 
@@ -175,8 +191,9 @@ This allows users to seamlessly move from browsing a strategy to training on tha
 |------|------|-----------|
 | Street selector simplification | Low | Straightforward removal of unused options |
 | Preflop spot selector (preflop-only) | Low | Removing postflop options, no new logic |
-| Embedding Strategy page action navigation in trainer | Medium | Component reads from shared Redux state — need to ensure no cross-contamination between Strategy page and Trainer |
 | Switching config endpoint | Medium | Response shapes are similar but need field compatibility verification |
+| Stabilizing Custom Spot Builder API calls | Medium | The builder already calls the right endpoint — work is aligning query params and fixing edge cases, not a rewrite |
+| Aligning board card modal | Low | Reusing an existing, well-tested component |
 | Deep link enhancement | Low | Additive change to existing working mechanism |
 
 ---
@@ -185,10 +202,12 @@ This allows users to seamlessly move from browsing a strategy to training on tha
 
 1. Simplify StreetSelector to 2 modes (Preflop | Custom), remove Flop/Turn/River
 2. Wire Preflop mode with Strategy page config selectors and preflop spot picker
-3. Switch from `trainer-games-config` to `games-new-config` endpoint
-4. Replace custom action builder with embedded `PlayerActionsMenu` and `SelectBoardCardsModal`
-5. Enhance deep link to carry full action sequence and board cards for Custom mode
-6. Remove dead code (custom builder, spot discovery, postflop auto-correction logic)
-7. Ensure Redux state isolation between Strategy page and Trainer Custom mode
-8. Simplify `TrainerLanding.tsx` conditional rendering for 2 modes
-9. Update unit tests for reworked landing page
+3. Switch from `trainer-games-config` to `games-new-config` endpoint for both modes
+4. Align Custom Spot Builder's `/get-player-next-actions` query construction with Strategy page
+5. Integrate Strategy page's `SelectBoardCardsModal` into the Custom Spot Builder
+6. Align config cascade with Strategy page's `useGameConfig` logic
+7. Fix known Custom Spot Builder edge cases (auto-correction loops, config drift between advanced settings and builder)
+8. Enhance deep link to carry full action sequence and board cards for Custom mode pre-population
+9. Remove dead code (standalone postflop modes, spot discovery for individual streets, postflop pot type selector)
+10. Simplify `TrainerLanding.tsx` conditional rendering for 2 modes
+11. Update unit tests for reworked landing page
