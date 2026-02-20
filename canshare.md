@@ -145,6 +145,16 @@ This rework is **frontend-only**.
 | Trainer-specific config cascade logic | Config cascade aligned with Strategy page — single source of truth |
 | Custom builder queries the same API with different parameter construction | Query construction aligned with Strategy page for consistent results |
 
+### Downstream impact: accurate pot sizes and bet sizes on the gameplay screen
+
+This approach also improves the accuracy of pot sizes and bet sizes displayed during actual training gameplay.
+
+When postflop training is configured via dropdowns (e.g., "Flop → 3-Bet Pot"), the backend must reconstruct the preflop action sequence to calculate the pot entering the flop. For 3-bet and 4-bet pots, the backend does not know the exact raise sizes from the solver — it attempts tree-based discovery first, but falls back to placeholder raise sizes when that fails. If the raise sizes are approximate, the pot size entering the flop is incorrect, and every bet size shown on the table (expressed as a fraction of pot) is calculated against that incorrect pot. This cascades through every subsequent street.
+
+With Custom Mode, the user builds the exact action sequence from the strategy tree — including real raise sizes. That sequence is sent directly to the backend via `customConfig.preflopActions`, bypassing the inference and fallback logic entirely. The pot size is correct by construction, and all bet sizes downstream are accurate.
+
+For Preflop mode, this is not a concern — the hand ends before postflop, so pot and bet size inference does not apply.
+
 ---
 
 ## What Stays Unchanged
