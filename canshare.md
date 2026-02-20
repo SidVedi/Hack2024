@@ -4,7 +4,7 @@
 
 The V3 landing page currently supports 5 street modes (Preflop / Flop / Turn / River / Custom), each with its own spot selection logic, config validation, and edge cases. The number of possible combinations across street, spot, and game config has grown beyond what we can confidently test and ship. Consolidating to two well-defined modes lets us deliver a reliable experience faster.
 
-### 2. Custom Mode is a better experience than postflop dropdowns — not a feature cut
+### 2. Custom Mode delivers a more accurate postflop training experience
 
 When a user selects "Flop → SRP" from a dropdown, the backend must **infer** the exact preflop action sequence that led to that pot type. This inference has known limitations, particularly for 3-bet and 4-bet pots where raise sizes vary across solver configurations:
 
